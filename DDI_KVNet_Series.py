@@ -263,7 +263,16 @@ class DDI_KVNet(nn.Module):
         x_out=x_k1+alpha4*(x_k1-xk)
 
         return x_out,y_out
-    
+
+class DDI_KVNet_Series(nn.Module):
+    def __init__(self,layernum=10):
+        super(DDI_KVNet_Series,self).__init__()
+        self.layernum=layernum
+        self.series=nn.ModuleList([DDI_KVNet() for _ in range(layernum)])
+    def forward(self,xk,yk,y0,mask,denoiser,cs_ratio,device):
+        for i,l in enumerate(self.series):
+            xk,yk=l(xk,yk,y0,mask,denoiser,cs_ratio,i+1,device)
+        return xk
 ##################################################################################### 
 
 class RandomDataset(Dataset):
@@ -276,7 +285,7 @@ class RandomDataset(Dataset):
         return self.len
     
 #####################################################################################
-#load denoiser
+
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(device)
 #denoiser
@@ -310,8 +319,8 @@ for cs_ratio in train_cs_ratio_set:
 
     Phi[cs_ratio] = torch.from_numpy(Phi_all[cs_ratio]).type(torch.FloatTensor)
 
-#prepare model
-model = DDI_KVNet()
+#model
+model = DDI_KVNet_Series(layernum=10)
 model = nn.DataParallel(model)
 model = model.to(device)
 optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
@@ -320,8 +329,8 @@ ifft=iFFT_image()
 loss_l1=nn.L1Loss()
 print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in model.parameters())))
 
-#prepare dataset
-batch_size = 8
+#dataset
+batch_size = 1
 data_dir='data'
 Training_data_Name = 'Training_BrainImages_256x256_100.mat'
 Training_data = sio.loadmat('./%s/%s' % (data_dir, Training_data_Name))
@@ -346,18 +355,11 @@ save_interval=10
 #train
 if run_mode=='train':
     if start_epoch>0:
-        model.module.load_state_dict(torch.load('DDI_KVNet_model/NO_1_net_epochs_%d.pkl' % (start_epoch)))
+        model.module.load_state_dict(torch.load('DDI_KVNet_model/NO_1_series_epochs_%d.pkl' % (start_epoch)))
     start_time=time()
     for epoch_i in range(start_epoch+1, end_epoch+1):
         model = model.train()
-        step = 0
-        max_iter=5
-        if 20<epoch_i<=50:
-            max_iter=10
-        elif epoch_i>50:
-            max_iter=20
-        elif epoch_i>100:
-            max_iter=30
+        step=0
         for data in rand_loader:
             time1=time()
             step = step+1
@@ -379,15 +381,9 @@ if run_mode=='train':
             y0 = fft(x, mask)
             xk=ifft(y0,only_real=False)
             yk=y0
-            n_step=random.randint(1,max_iter)
-            model=model.eval()
-            with torch.no_grad():
-                for i in range(1,n_step):
-                    xk,yk=model(xk,yk,y0,mask,denoiser,rand_cs_ratio,i,device)
-                    #a=ssim(xk[:,0:1,:,:].clamp(0,1),x[:,0:1,:,:],data_range=1,size_average=True)
-                    #print(a)
-            model=model.train()
-            x_out,y_out = model(xk,yk,y0,mask,denoiser,rand_cs_ratio,n_step,device)
+            
+            
+            x_out = model(xk,yk,y0,mask,denoiser,rand_cs_ratio,device)
             time2=time()
             # Compute and print loss
           
@@ -408,8 +404,8 @@ if run_mode=='train':
             # step %100==0
             if step % 100 == 0:
                 step_time=time()-start_time
-                output_data = "time:%.2f [%02d/%02d] Step:%.0f | CS ratio:%.0f | n_step:%d | Total Loss: %.6f | SSIM Loss: %.4f" % \
-                            (step_time, epoch_i, end_epoch, step,rand_cs_ratio,n_step,loss_all.item(),loss_ssim.item())
+                output_data = "time:%.2f [%02d/%02d] Step:%.0f | CS ratio:%.0f | Total Loss: %.6f | SSIM Loss: %.4f" % \
+                            (step_time, epoch_i, end_epoch, step,rand_cs_ratio,loss_all.item(),loss_ssim.item())
                 print(output_data)
 
             # Load pre-trained model with epoch number
@@ -417,10 +413,10 @@ if run_mode=='train':
         
         # save model in every epoch
         if epoch_i % save_interval ==0:
-            torch.save(model.module.state_dict(), "DDI_KVNet_model/NO_1_net_epochs_%d.pkl" % ( epoch_i))  # save only the parameters
+            torch.save(model.module.state_dict(), "DDI_KVNet_model/NO_1_series_epochs_%d.pkl" % ( epoch_i))  # save only the parameters
 
 elif run_mode=='test':
-    model.module.load_state_dict(torch.load('DDI_KVNet_model/NO_1_net_epochs_%d.pkl' % (end_epoch)))
+    model.module.load_state_dict(torch.load('DDI_KVNet_model/NO_1_series_epochs_%d.pkl' % (end_epoch)))
     model=model.eval()
     PSNRL=[]
     SSIML=[]
@@ -443,8 +439,8 @@ elif run_mode=='test':
             
             #time1=time()
             with torch.no_grad():
-                for i in range(1,15):
-                    xk,yk=model(xk,yk,y0,mask,denoiser,cs_ratio,i,device)
+                
+                xk=model(xk,yk,y0,mask,denoiser,cs_ratio,device)
                 #x_m=fft_mask_forback(batch_x,expand_mask)
                 # a=ssim(xk[:,0:1,:,:].clamp(0,1),x[:,0:1,:,:],data_range=1,size_average=True)
                 # print(a)
@@ -460,14 +456,14 @@ elif run_mode=='test':
                 # print(psnr_,ssim_)
                 im_rec_rgb = np.clip(x_pre, 0, 255).astype(np.uint8)
                 img_name = f"brain_test_{n:02d}"
-                result_dir = f'result/Brain_test_DDI_KVNet_NO3_epoch_{end_epoch}/'
+                result_dir = f'result/Brain_test_DDI_KVNet_NO1_series_epoch_{end_epoch}/'
                 os.makedirs(result_dir, exist_ok=True)
                 img_dir =result_dir + img_name+ "_ratio_%d_PSNR_%.3f_SSIM_%.5f.png" % (cs_ratio,psnr_, ssim_)
                 
                 cv2.imwrite(img_dir, im_rec_rgb)
         PSNRL.append(np.mean(psnr_step))
         SSIML.append(np.mean(ssim_step))
-    with open(f'DDI_KVNet_{end_epoch}.txt','a') as f:
+    with open(f'DDI_KVNet_series_{end_epoch}.txt','a') as f:
         
         f.write('\n')
         
