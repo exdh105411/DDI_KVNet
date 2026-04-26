@@ -276,7 +276,7 @@ class RandomDataset(Dataset):
         return self.len
     
 #####################################################################################
-
+#load denoiser
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(device)
 #denoiser
@@ -290,7 +290,7 @@ denoiser = denoiser.to(device)
 
 #load mask
 rand_num = 1
-matrix_dir='Cartesian_untrained'
+matrix_dir='Cartesian'
 if matrix_dir == '2D-random':
     train_cs_ratio_set = [5, 10, 20, 30, 40]
 elif matrix_dir =='Cartesian_untrained':
@@ -310,7 +310,7 @@ for cs_ratio in train_cs_ratio_set:
 
     Phi[cs_ratio] = torch.from_numpy(Phi_all[cs_ratio]).type(torch.FloatTensor)
 
-#model
+#prepare model
 model = DDI_KVNet()
 model = nn.DataParallel(model)
 model = model.to(device)
@@ -320,7 +320,7 @@ ifft=iFFT_image()
 loss_l1=nn.L1Loss()
 print("Total number of paramerters in networks is {}  ".format(sum(x.numel() for x in model.parameters())))
 
-#dataset
+#prepare dataset
 batch_size = 8
 data_dir='data'
 Training_data_Name = 'Training_BrainImages_256x256_100.mat'
@@ -460,8 +460,9 @@ elif run_mode=='test':
                 # print(psnr_,ssim_)
                 im_rec_rgb = np.clip(x_pre, 0, 255).astype(np.uint8)
                 img_name = f"brain_test_{n:02d}"
-                os.makedirs(f'result/Brain_test_DDI_KVNet_epoch_{end_epoch}/', exist_ok=True)
-                img_dir =f'result/Brain_test_DDI_KVNet_epoch_{end_epoch}/' + img_name+ "_ratio_%d_PSNR_%.3f_SSIM_%.5f.png" % (cs_ratio,psnr_, ssim_)
+                result_dir = f'result/Brain_test_DDI_KVNet_NO1_epoch_{end_epoch}/'
+                os.makedirs(result_dir, exist_ok=True)
+                img_dir =result_dir + img_name+ "_ratio_%d_PSNR_%.3f_SSIM_%.5f.png" % (cs_ratio,psnr_, ssim_)
                 
                 cv2.imwrite(img_dir, im_rec_rgb)
         PSNRL.append(np.mean(psnr_step))
